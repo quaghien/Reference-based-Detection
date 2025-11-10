@@ -4,6 +4,8 @@
 
 A lightweight Siamese network-based object detector designed for finding small objects in drone video frames by matching against reference template images. The system uses a shared backbone encoder with depthwise cross-correlation to generate 2D similarity heatmaps, followed by regression heads for precise bounding box localization.
 
+<img src="images/refdet.png" alt="Architecture Overview" width="70%">
+
 ## Key Technical Features
 
 ### Architecture
