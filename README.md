@@ -24,7 +24,7 @@ python train.py \
     --batch_size 8 \
     --epochs 60 \
     --lr 1e-4 \
-    --weight_decay 1e-4 \
+    --weight_decay 1e-4 \ #can 0.0
     --augment_prob 0.4 \
     --num_heads 8 \
     --num_layers 4 \
