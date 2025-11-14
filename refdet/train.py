@@ -101,10 +101,10 @@ def train_one_epoch(model, loader, optimizer, scaler, device, epoch: int = 0) ->
         
         # Update progress bar with better formatting
         pbar.set_postfix({
+            "loss": f"{loss.item():.4f}",
             "cls": f"{cls_loss.item():.4f}",
             "reg": f"{reg_loss.item():.4f}" if reg_loss.item() > 0 else "0.0000",
-            "patch_acc": f"{acc:.3f}",
-            "total_loss": f"{loss.item():.4f}"
+            "acc": f"{acc:.3f}"
         })
 
     steps = len(loader)
@@ -160,7 +160,7 @@ def evaluate(model, loader, device, epoch: int = 0) -> Dict[str, float]:
             # Update progress bar
             current_iou = total_iou / total_samples if total_samples > 0 else 0.0
             current_acc = total_acc / (pbar.n + 1)
-            pbar.set_postfix({"mIoU": f"{current_iou:.4f}", "patch_acc": f"{current_acc:.3f}"})
+            pbar.set_postfix({"mIoU": f"{current_iou:.4f}", "acc": f"{current_acc:.3f}"})
 
     return {
         "mean_iou": total_iou / total_samples,
@@ -180,7 +180,7 @@ def main(args):
     model.to(device)
 
     # Datasets
-    train_dataset = PatchRetrievalDataset(args.data_dir, split="train", augment=True, img_size=640)
+    train_dataset = PatchRetrievalDataset(args.data_dir, split="train", augment=True, augment_prob=args.augment_prob, img_size=640)
     val_dataset = PatchRetrievalDataset(args.data_dir, split="val", augment=False, img_size=640)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, 
@@ -191,6 +191,19 @@ def main(args):
     # Optimizer and scaler
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scaler = torch.amp.GradScaler('cuda', enabled=device.type == "cuda")
+    
+    # Load checkpoint if provided
+    start_epoch = 0
+    best_miou = 0.0
+    if args.checkpoint_path:
+        print(f"Loading checkpoint from {args.checkpoint_path}")
+        checkpoint = torch.load(args.checkpoint_path, map_location=device)
+        model.load_state_dict(checkpoint['model'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        scaler.load_state_dict(checkpoint['scaler'])
+        start_epoch = checkpoint.get('epoch', 0)
+        best_miou = checkpoint.get('best_miou', checkpoint.get('val_mIoU', 0.0))
+        print(f"Resumed from epoch {start_epoch}, best mIoU: {best_miou:.4f}")
 
     # Setup output directory
     output_dir = Path(args.output_dir)
@@ -200,11 +213,13 @@ def main(args):
     training_log_file = output_dir / "training_log.json"
     training_log = []
     
-    print(f"Training: {len(train_dataset)} train, {len(val_dataset)} val | Device: {device} | Batch: {args.batch_size} | Epochs: {args.epochs}\n")
+    print(f"Training: {len(train_dataset)} train, {len(val_dataset)} val | Device: {device} | Batch: {args.batch_size} | Epochs: {args.epochs}")
+    if args.checkpoint_path:
+        print(f"Resuming from epoch {start_epoch}\n")
+    else:
+        print()
     
-    best_miou = 0.0
-    
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         epoch_num = epoch + 1
         
         # Training
@@ -292,6 +307,8 @@ if __name__ == "__main__":
     parser.add_argument("--num_heads", type=int, default=8, help="Number of attention heads")
     parser.add_argument("--num_layers", type=int, default=4, help="Number of transformer layers")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate")
+    parser.add_argument("--augment_prob", type=float, default=0.2, help="Probability of applying augmentation (0.2 = 20% of data)")
+    parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to checkpoint to resume training from")
     parser.add_argument("--workers", type=int, default=4, help="Number of data loading workers")
     args = parser.parse_args()
 

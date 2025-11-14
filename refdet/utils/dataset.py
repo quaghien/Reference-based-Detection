@@ -14,10 +14,11 @@ from .geometry import make_patch_heatmaps, encode_patch_bbox_deltas
 class PatchRetrievalDataset(Dataset):
     """Dataset for patch-based Siamese retrieval detection."""
 
-    def __init__(self, root: str, split: str = "train", augment: bool = True, img_size: int = 640):
+    def __init__(self, root: str, split: str = "train", augment: bool = True, augment_prob: float = 0.75, img_size: int = 640):
         self.root = Path(root)
         self.split = split
         self.augment = augment
+        self.augment_prob = augment_prob  # Probability of applying augmentation (0.75 = 75%)
         self.img_size = img_size
 
         # Patch configuration (fixed for 640x640, 4x4 grid)
@@ -100,7 +101,10 @@ class PatchRetrievalDataset(Dataset):
         template_path = random.choice(self.template_paths[video_id])
 
         # Transform both images with same augmentation parameters (if augmenting)
-        if self.augment:
+        # Only apply augmentation with probability augment_prob to preserve data distribution
+        should_augment = self.augment and (random.random() < self.augment_prob)
+        
+        if should_augment:
             # Generate augmentation parameters once and apply to both images
             aug_params = {
                 'angle': random.uniform(-10, 10),
@@ -120,6 +124,7 @@ class PatchRetrievalDataset(Dataset):
         else:
             search_img = self.transform(img_path, aug_params=None)
             template_img = self.transform(template_path, aug_params=None)
+            aug_params = None
 
         # Read ground truth bbox from label file (YOLO format)
         with open(label_path) as f:
@@ -128,7 +133,7 @@ class PatchRetrievalDataset(Dataset):
         _, x_c, y_c, w, h = map(float, parts[:5])  # Normalized coordinates (0-1)
         
         # Transform bbox coordinates if geometric augmentation was applied
-        if self.augment:
+        if should_augment and aug_params is not None:
             # Apply same transformations to bbox coordinates
             # Note: For small rotations (±10°) and affine transforms, bbox changes are minimal
             # For flips, we need to transform coordinates

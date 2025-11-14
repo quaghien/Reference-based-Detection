@@ -2,171 +2,295 @@
 
 ## 📋 Giới thiệu
 
-RefDet là pipeline phát hiện vật thể nhỏ trong video drone bằng cách so khớp ảnh tham chiếu (template) với ảnh tìm kiếm (search). Toàn bộ mô tả dưới đây sử dụng tiếng Việt để dễ vận hành và chia sẻ nội bộ.
+RefDet phát hiện vật thể nhỏ trong video drone bằng cách so khớp ảnh tham chiếu (template) với ảnh tìm kiếm (search).
 
-## 🏗️ Kiến trúc Model V2
+**Kiến trúc**: EfficientNet-B3 backbone + Transformer (4 layers, 8 heads) + Patch-based detection (4×4 grid)
 
-- **Backbone**: EfficientNet-B3 (tiền huấn luyện ImageNet) chia sẻ cho template và search.
-- **Kích thước đầu vào**: 640×640, 3 kênh.
-- **Số kênh đặc trưng**: 512D sau projection head.
-- **Lưới patch**: 4×4 = 16 patch cho ảnh search.
-- **Cơ chế Attention**:
-  - Self-Attention trên 16 patch của ảnh search.
-  - Cross-Attention: patch ảnh search (Query) tham chiếu tokens không gian của template (Key/Value).
-- **Tham số**: 31.71M (~121 MB FP32 / 61 MB FP16).
-- **Đầu ra**: 16 xác suất (cls) + 16 bbox delta (reg) theo patch.
-
-### Sơ đồ luồng xử lý
-
-1. **Template**  
-   - Ảnh template → EfficientNet-B3 → Tensor 512×H×W.  
-   - AdaptiveAvgPool2d(4×4) → Flatten → 16 tokens (mỗi token 512D) → LayerNorm.
-2. **Search**  
-   - Ảnh search → EfficientNet-B3 → Tensor 512×H×W.  
-   - Chia 4×4 patch, Flatten từng patch → Linear thích nghi → Cộng positional embedding 2D.  
-   - Qua `num_layers` TransformerBlock (self-attention + FFN).
-3. **Cross-Attention**  
-   - Query: patch search sau self-attention.  
-   - Key/Value: 16 tokens của template.  
-   - Kết quả được chuẩn hóa (LayerNorm).
-4. **Đầu dự đoán**  
-   - Linear đưa patch trở lại bố cục 4×4 → Conv refinement.  
-   - **Cls head**: Flatten → MLP → Sigmoid → xác suất patch.  
-   - **Reg head**: Flatten → MLP → 16 × (dx, dy, dw, dh).
-
-### Ưu điểm chính
-- Template và search chia sẻ backbone → giảm tham số.
-- Patch grid 4×4 + positional embedding giúp bắt vật thể nhỏ và giữ thông tin vị trí.
-- Cross-attention trực tiếp giữa patch search và tokens không gian của template → tăng độ chính xác truy hồi.
-- Head conv + MLP giúp tinh chỉnh đặc trưng không gian trước khi dự đoán.
-
-## 📁 Cấu trúc thư mục
-
-```
-refdet/
-├── data_process/              # Script xử lý dữ liệu
-│   ├── prepare_retrieval_dataset_flat.py   # Tách frame + tạo label YOLO
-│   ├── create_zoomed_dataset.py            # Nhân đôi data bằng zoom
-│   └── fix_labels.py                       # Đảm bảo mỗi file chỉ 1 bbox
-├── refdet/                   # Source code model V2
-│   ├── model.py              # Định nghĩa kiến trúc
-│   ├── train.py              # Vòng huấn luyện + đánh giá
-│   └── utils/                # Dataset, geometry, metrics, transforms
-├── retrieval_dataset_flat/          # Dataset gốc (sau khi chuẩn hóa)
-├── retrieval_dataset_flat_zoomed/   # Dataset gốc + bản zoom (x2 size)
-└── requirements.txt                # Thư viện cần cài
-```
-
-## ⚙️ Chuẩn bị môi trường
+## ⚙️ Cài đặt
 
 ```bash
-conda activate zlai
 pip install -r requirements.txt
 ```
 
-## 🗂️ Xử lý dữ liệu
+## 🚀 Training
 
-1. **Trích xuất frame + template**  
-   ```bash
-   cd refdet/data_process
-   python prepare_retrieval_dataset_flat.py \
-       --source_dir ../train \
-       --output_dir ../retrieval_dataset_flat
-   ```
-2. **Fix label (mỗi file 1 bbox)**  
-   ```bash
-   python fix_labels.py --data_dir ../retrieval_dataset_flat
-   ```
-3. **Nhân đôi data bằng zoom**  
-   ```bash
-   python create_zoomed_dataset.py \
-       --source_dir ../retrieval_dataset_flat \
-       --output_dir ../retrieval_dataset_flat_zoomed \
-       --area_ratio1 0.15 \
-       --area_ratio2 0.35 \
-       --area_ratio3 0.55 \
-       --area_ratio4 0.75
-   ```
-
-## 🧠 Nhu cầu VRAM & Training
-
-- **Inference (batch=1)**: ≈ 1–2 GB.
-- **Training FP32 (batch=8)**: ≈ 12–15 GB.
-- **Training FP32 (batch=16)**: ≈ 23–24 GB (đã đo trên RTX 3090).
-- **Training FP16 (batch=8)**: ≈ 6–8 GB.
-- **Khuyến nghị**: GPU ≥ 8 GB, ưu tiên FP16 + batch 8 để ổn định.
-
-### Chạy huấn luyện
+### Training từ đầu
 
 ```bash
-cd refdet/refdet
+cd refdet
 python train.py \
-    --data_dir ../retrieval_dataset_flat_zoomed \
-    --batch_size 8 \
-    --epochs 30 \
+    --data_dir /path/to/dataset \
+    --output_dir outputs_v2 \
+    --batch_size 16 \
+    --epochs 12 \
     --lr 1e-4 \
+    --augment_prob 0.2 \
     --num_heads 8 \
-    --num_layers 2 \
+    --num_layers 4 \
     --dropout 0.1 \
     --workers 4
 ```
 
-### Siêu tham số quan trọng
+### Resume từ checkpoint
 
-- `--data_dir`: thư mục dataset (nên trỏ tới bản zoomed).
-- `--batch_size`: mặc định 16, giảm xuống 8 nếu GPU 8 GB.
-- `--num_heads`, `--num_layers`: điều chỉnh độ rộng/ sâu của attention stack.
-- `--dropout`: 0.1 giúp regularize patch features.
-- `--workers`: số tiến trình load dữ liệu (4 là an toàn).
+```bash
+cd refdet
+python train.py \
+    --data_dir /path/to/dataset \
+    --output_dir outputs_v2 \
+    --checkpoint_path outputs_v2/checkpoint_epoch_20.pth \
+    --batch_size 16 \
+    --epochs 12 \
+    --lr 1e-4 \
+    --weight_decay 1e-4 \
+    --augment_prob 0.2 \
+    --num_heads 8 \
+    --num_layers 4 \
+    --dropout 0.1 \
+    --workers 4
+```
 
-### Checkpoint
+**Lưu ý**: Khi resume, các tham số model (`num_heads`, `num_layers`, `dropout`) phải khớp với checkpoint. Các tham số training (`lr`, `batch_size`, `augment_prob`) có thể thay đổi.
 
-- `checkpoints/best_model_rank{1..3}.pt`: lưu theo mIoU cao nhất.
-- `checkpoints/last_model_epoch_N.pt`: epoch cuối cùng.
-- `checkpoints/checkpoint_epoch_N.pt`: lưu chu kỳ 20 epoch (model + optimizer + scaler).
+### Tham số quan trọng
 
-## 📊 Chỉ số theo dõi
+- `--augment_prob`: Xác suất augment (mặc định 0.2 = 20%)
+- `--checkpoint_path`: Đường dẫn checkpoint để resume training
+- `--batch_size`: Mặc định 16, giảm xuống 8 nếu GPU < 16GB
+- `--epochs`: Số epoch (mặc định 80)
 
-- **mIoU**: trung bình IoU sau khi decode bbox.
-- **Patch Accuracy**: tỉ lệ patch được phân loại đúng (có/không có vật thể).
+## 🔍 Inference
 
-## 📦 Cấu trúc dataset
+```bash
+cd refdet
+python inference.py \
+    --checkpoint_path outputs_v2/best_model_epoch_X_mIoU_X.XXXX.pth \
+    --data_dir /path/to/dataset \
+    --split public_test \
+    --output_dir ./results \
+    --confidence_threshold 0.5
+```
+
+### Tham số inference
+
+- `--checkpoint_path`: Đường dẫn model checkpoint (bắt buộc)
+- `--data_dir`: Thư mục dataset root (bắt buộc)
+- `--split`: Dataset split (mặc định: `public_test`)
+- `--output_dir`: Thư mục output - sẽ lưu `submission.json` trong thư mục này (bắt buộc)
+- `--confidence_threshold`: Ngưỡng confidence (mặc định: 0.5)
+
+## 📁 Cấu trúc Dataset
 
 ```
-retrieval_dataset_flat/
+dataset/
 ├── train/
-│   ├── templates/          # Ảnh tham chiếu (copy cho cả train/val)
+│   ├── templates/          # Ảnh tham chiếu
 │   └── search/
 │       ├── images/         # Frame đã trích
 │       └── labels/         # Nhãn YOLO (class x_c y_c w h)
-└── val/
+├── val/
+│   └── ... (tương tự)
+└── public_test/
     ├── templates/
     └── search/
-        ├── images/
-        └── labels/
+        └── images/
 ```
 
-Dataset `retrieval_dataset_flat_zoomed` có cùng cấu trúc nhưng số lượng ảnh gấp đôi (ảnh gốc + ảnh zoom theo tỷ lệ 15/35/55/75% diện tích).
+## 💾 Checkpoint
 
-## 🛠️ Công cụ hỗ trợ
+- `best_model_epoch_X_mIoU_X.XXXX.pth`: Model tốt nhất (theo mIoU)
+- `last_model_epoch_X.pth`: Model epoch cuối
+- `checkpoint_epoch_X.pth`: Checkpoint đầy đủ (model + optimizer + scaler) - lưu mỗi 20 epochs
 
-- **Sửa nhãn**  
-  ```bash
-  python data_process/fix_labels.py --data_dir retrieval_dataset_flat
-  ```
-- **Tạo dataset zoom**  
-  ```bash
-  python data_process/create_zoomed_dataset.py \
-      --source_dir retrieval_dataset_flat \
-      --output_dir retrieval_dataset_flat_zoomed \
-      --area_ratio1 0.15 --area_ratio2 0.35 \
-      --area_ratio3 0.55 --area_ratio4 0.75
-  ```
+## 📊 Metrics
+
+- **mIoU**: Mean IoU sau khi decode bbox
+- **Patch Accuracy**: Tỉ lệ patch được phân loại đúng
+- **Loss**: Classification loss + Regression loss
+
+## 🧠 Yêu cầu VRAM
+
+- **Inference**: ~1-2 GB
+- **Training (batch=8)**: ~6-8 GB (FP16) / ~12-15 GB (FP32)
+- **Training (batch=16)**: ~23-24 GB (FP32)
+
+**Khuyến nghị**: GPU ≥ 8GB, dùng FP16 + batch_size=8
+
+## 🗂️ Xử lý dữ liệu
+
+### 1. Trích xuất frame + template
+
+```bash
+cd data_process
+python prepare_retrieval_dataset_flat.py \
+    --source_dir ../train \
+    --output_dir ../retrieval_dataset_flat
+```
+
+### 2. Fix label (mỗi file 1 bbox)
+
+```bash
+python fix_labels.py --data_dir ../retrieval_dataset_flat
+```
+
+### 3. Tạo dataset zoom (tùy chọn)
+
+```bash
+python create_zoomed_dataset.py \
+    --source_dir ../retrieval_dataset_flat \
+    --output_dir ../retrieval_dataset_flat_zoomed \
+    --area_ratio1 0.15 \
+    --area_ratio2 0.35 \
+    --area_ratio3 0.55 \
+    --area_ratio4 0.75
+```
 
 ## 📝 Ghi chú
 
-- **Tham số model**: 31.71M (< 50M theo yêu cầu).
-- **Dataset zoomed**: nên dùng cho training để cải thiện recall.
-- **Định dạng nhãn**: YOLO chuẩn `class_id x_c y_c w h` (0–1).
-- **Mixed Precision (AMP)**: bật mặc định trong `train.py`, giúp tiết kiệm ~40% VRAM.
-- **Batch size**: luôn điều chỉnh theo dung lượng VRAM thực tế; giảm batch trước khi giảm kiến trúc.
+- Model sử dụng **Mixed Precision (AMP)** tự động để tiết kiệm VRAM
+- **Augment probability**: 20% để giữ phân phối dữ liệu gốc
+- **Output format**: submission.json theo format yêu cầu với `video_id`, `detections`, `bboxes` (frame, x1, y1, x2, y2)
+
+## 🏗️ Kiến trúc Model
+
+### Sơ đồ tổng quan
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         Enhanced Siamese Detector V2                     │
+└─────────────────────────────────────────────────────────────────────────┘
+
+INPUT: Template (640×640×3)          INPUT: Search (640×640×3)
+         │                                    │
+         ▼                                    ▼
+┌────────────────────┐            ┌────────────────────┐
+│  EfficientNet-B3   │            │  EfficientNet-B3   │
+│   (Shared)         │            │   (Shared)         │
+└────────────────────┘            └────────────────────┘
+         │                                    │
+    (B,512,H,W)                          (B,512,H,W)
+         │                                    │
+         ▼                                    ▼
+┌────────────────────┐            ┌────────────────────┐
+│ AdaptiveAvgPool2d  │            │   PatchEmbedding   │
+│      (4×4)         │            │    (4×4 grid)      │
+└────────────────────┘            └────────────────────┘
+         │                                    │
+    (B,512,4,4)                          (B,16,512)
+         │                                    │
+         ▼                                    ▼
+┌────────────────────┐            ┌────────────────────┐
+│   Flatten + Permute│            │  Self-Attention     │
+│   + LayerNorm      │            │  (4 layers)         │
+└────────────────────┘            └────────────────────┘
+         │                                    │
+    (B,16,512)                           (B,16,512)
+         │                                    │
+         └──────────────┬─────────────────────┘
+                        │
+                        ▼
+              ┌────────────────────┐
+              │  Cross-Attention   │
+              │  Q: Search patches │
+              │  K,V: Ref tokens    │
+              └────────────────────┘
+                        │
+                   (B,16,512)
+                        │
+                        ▼
+              ┌────────────────────┐
+              │   Final LayerNorm  │
+              └────────────────────┘
+                        │
+                        ▼
+              ┌────────────────────┐
+              │  Spatial Refine    │
+              │  Linear+Norm+ReLU  │
+              └────────────────────┘
+                        │
+                   (B,16,512)
+                        │
+                        ▼
+              ┌────────────────────┐
+              │  Reshape to 4×4   │
+              │  (B,512,4,4)       │
+              └────────────────────┘
+                        │
+                        ▼
+              ┌────────────────────┐
+              │  Conv Refinement   │
+              │  2× Conv2d+BN+ReLU│
+              └────────────────────┘
+                        │
+                   (B,256,4,4)
+                        │
+         ┌──────────────┴──────────────┐
+         │                             │
+         ▼                             ▼
+┌─────────────────┐          ┌─────────────────┐
+│  Cls Head       │          │  Reg Head        │
+│  Flatten        │          │  Flatten         │
+│  MLP(256→128→64)│          │  MLP(256→128→64) │
+│  Sigmoid        │          │  Linear(64→64)   │
+└─────────────────┘          └─────────────────┘
+         │                             │
+    (B,16,1)                      (B,16,4)
+         │                             │
+         └──────────────┬──────────────┘
+                        │
+                        ▼
+              ┌────────────────────┐
+              │   Output           │
+              │   - cls_probs       │
+              │   - bbox_deltas     │
+              └────────────────────┘
+```
+
+### Chi tiết các thành phần
+
+#### 1. Backbone (EfficientNet-B3)
+- **Input**: 640×640×3
+- **Output**: (B, 512, H, W) sau projection head
+- **Shared**: Template và Search dùng chung backbone
+
+#### 2. Template Processing
+```
+Template (640×640×3)
+  → EfficientNet-B3 → (B, 512, H, W)
+  → AdaptiveAvgPool2d(4×4) → (B, 512, 4, 4)
+  → Flatten(2) + Permute(0,2,1) → (B, 16, 512)
+  → LayerNorm → (B, 16, 512) [Reference Tokens]
+```
+
+#### 3. Search Processing
+```
+Search (640×640×3)
+  → EfficientNet-B3 → (B, 512, H, W)
+  → PatchEmbedding (4×4 grid) → (B, 16, 512)
+  → Self-Attention (4 layers) → (B, 16, 512)
+```
+
+#### 4. Cross-Attention
+- **Query**: Search patches (B, 16, 512)
+- **Key/Value**: Reference tokens (B, 16, 512)
+- **Output**: Attended patches (B, 16, 512)
+
+#### 5. Detection Heads
+```
+Attended patches (B, 16, 512)
+  → Spatial Refine (Linear+Norm+ReLU) → (B, 16, 512)
+  → Reshape to 4×4 → (B, 512, 4, 4)
+  → Conv Refinement (2× Conv2d) → (B, 256, 4, 4)
+  → Classification Head: Flatten → MLP → Sigmoid → (B, 16, 1)
+  → Regression Head: Flatten → MLP → (B, 16, 4)
+```
+
+### Tham số Model
+
+- **Backbone**: EfficientNet-B3 (pretrained ImageNet)
+- **Embedding dim**: 512
+- **Patch grid**: 4×4 = 16 patches
+- **Transformer layers**: 4 (self-attention)
+- **Attention heads**: 8
+- **Dropout**: 0.1
+- **Total params**: ~31.71M
