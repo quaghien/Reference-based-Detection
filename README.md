@@ -25,6 +25,7 @@ python train.py \
     --epochs 60 \
     --lr 1e-4 \
     --weight_decay 1e-4 \ #can 0.0
+   # Note: weight_decay can be set to 0.0 if needed
     --augment_prob 0.4 \
     --num_heads 8 \
     --num_layers 4 \
@@ -40,10 +41,11 @@ python train.py \
     --data_dir /path/to/dataset \
     --output_dir outputs_v2 \
     --checkpoint_path outputs_v2/checkpoint_epoch_2.pth \
-    --batch_size 60 \
-    --epochs 12 \
+    --batch_size 8 \
+    --epochs 60 \
     --lr 1e-4 \
-    --weight_decay 1e-4 \
+    --weight_decay 1e-4 \ #can 0.0
+   # Note: weight_decay can be set to 0.0 if needed
     --augment_prob 0.4 \
     --num_heads 8 \
     --num_layers 4 \
