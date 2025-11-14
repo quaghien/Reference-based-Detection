@@ -93,7 +93,10 @@ def process_video_to_train(samples_root: Path, video_id: str, record: Dict, dst_
     img_dir = dst_root / 'train' / 'search' / 'images'
     lbl_dir = dst_root / 'train' / 'search' / 'labels'
 
-    for frame_idx, boxes in frames_to_boxes.items():
+    # Process frames with progress bar
+    frame_indices = sorted(frames_to_boxes.keys())
+    for frame_idx in frame_indices:
+        boxes = frames_to_boxes[frame_idx]
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
         ret, frame = cap.read()
         if not ret or frame is None:
@@ -142,26 +145,33 @@ def main(source_dir: str = 'train', output_dir: str = 'retrieval_dataset_flat', 
 
     total_train, total_val, total_templates = 0, 0, 0
 
-    print('Copying templates (flattened to train/ & val/)...')
-    for vid in tqdm(rec_map.keys(), desc='Templates'):
-        total_templates += copy_templates_flat(samples_root, vid, dst_root)
+    print(f'\nProcessing {len(rec_map)} videos...\n')
+    print('Step 1: Copying templates (flattened to train/ & val/)...')
+    for vid in tqdm(rec_map.keys(), desc='Templates', ncols=100):
+        count = copy_templates_flat(samples_root, vid, dst_root)
+        total_templates += count
 
-    print('Extracting ALL annotated frames to train (flattened images/labels)...')
+    print(f'\nStep 2: Extracting ALL annotated frames to train (flattened images/labels)...')
     saved_map: Dict[str, List[str]] = {}
-    for vid in tqdm(rec_map.keys(), desc='Videos'):
+    for vid in tqdm(rec_map.keys(), desc='Extracting frames', ncols=100):
         basenames = process_video_to_train(samples_root, vid, rec_map[vid], dst_root)
         saved_map[vid] = basenames
         total_train += len(basenames)
+        tqdm.write(f"  {vid}: {len(basenames)} frames")
 
-    print('Sampling random frames per video for VAL (copied, not removed from train)...')
-    for vid, basenames in tqdm(saved_map.items(), desc='Val sampling'):
-        total_val += copy_random_val(dst_root, basenames, per_video=VAL_PER_VIDEO)
+    print(f'\nStep 3: Sampling random frames per video for VAL (copied, not removed from train)...')
+    for vid, basenames in tqdm(saved_map.items(), desc='Val sampling', ncols=100):
+        count = copy_random_val(dst_root, basenames, per_video=VAL_PER_VIDEO)
+        total_val += count
 
-    print('\n--- Done ---')
+    print('\n' + '='*60)
+    print('Dataset Preparation Complete!')
+    print('='*60)
     print(f"Templates copied: {total_templates}")
     print(f"Train frames:     {total_train}")
     print(f"Val frames:       {total_val}")
     print(f"Output at:        {dst_root.resolve()}")
+    print('='*60 + '\n')
 
 
 if __name__ == '__main__':
