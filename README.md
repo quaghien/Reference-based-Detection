@@ -21,10 +21,11 @@ cd refdet
 python train.py \
     --data_dir /path/to/dataset \
     --output_dir outputs_v2 \
-    --batch_size 16 \
-    --epochs 12 \
+    --batch_size 8 \
+    --epochs 60 \
     --lr 1e-4 \
-    --augment_prob 0.2 \
+    --weight_decay 1e-4 \
+    --augment_prob 0.4 \
     --num_heads 8 \
     --num_layers 4 \
     --dropout 0.1 \
@@ -38,12 +39,12 @@ cd refdet
 python train.py \
     --data_dir /path/to/dataset \
     --output_dir outputs_v2 \
-    --checkpoint_path outputs_v2/checkpoint_epoch_20.pth \
-    --batch_size 16 \
+    --checkpoint_path outputs_v2/checkpoint_epoch_2.pth \
+    --batch_size 60 \
     --epochs 12 \
     --lr 1e-4 \
-    --weight_decay 1e-5 \
-    --augment_prob 0.2 \
+    --weight_decay 1e-4 \
+    --augment_prob 0.4 \
     --num_heads 8 \
     --num_layers 4 \
     --dropout 0.1 \
