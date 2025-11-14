@@ -42,7 +42,7 @@ python train.py \
     --batch_size 16 \
     --epochs 12 \
     --lr 1e-4 \
-    --weight_decay 1e-4 \
+    --weight_decay 1e-5 \
     --augment_prob 0.2 \
     --num_heads 8 \
     --num_layers 4 \

@@ -67,7 +67,8 @@ class PatchEmbedding(nn.Module):
         self.pos_embed_h = nn.Parameter(torch.randn(1, self.grid_h, 1, embed_dim // 2) * 0.02)
         self.pos_embed_w = nn.Parameter(torch.randn(1, 1, self.grid_w, embed_dim // 2) * 0.02)
         
-        # Adaptive projection layer (will be created dynamically)
+        # Adaptive projection layer (register as None initially, will be created if needed)
+        # This allows loading from checkpoint that has adaptive_proj
         self.adaptive_proj = None
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -98,6 +99,8 @@ class PatchEmbedding(nn.Module):
         if patch_dim != self.embed_dim:
             if self.adaptive_proj is None:
                 self.adaptive_proj = nn.Linear(patch_dim, self.embed_dim).to(x.device)
+                # Register as a module so it can be saved/loaded properly
+                self.add_module('adaptive_proj', self.adaptive_proj)
             x = self.adaptive_proj(x)
         
         # Add 2D positional embeddings
