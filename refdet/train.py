@@ -315,7 +315,7 @@ def main(args):
         with open(training_log_file, 'w') as f:
             json.dump(training_log, f, indent=2)
         
-        # Save best model
+        # Save best model (model only, no optimizer/scheduler)
         if mIoU > best_miou:
             best_miou = mIoU
             best_model_path = output_dir / f"best_model_epoch_{epoch_num}_mIoU_{mIoU:.4f}.pth"
@@ -329,7 +329,7 @@ def main(args):
             }, best_model_path)
             print(f"New best model saved: mIoU={mIoU:.4f}")
         
-        # Save last model (overwrite previous)
+        # Save last model (model only, no optimizer/scheduler)
         last_model_path = output_dir / "last_model.pth"
         torch.save({
             "model": model.state_dict(),
@@ -340,13 +340,11 @@ def main(args):
             "config": vars(args),
         }, last_model_path)
         
-        # Save checkpoint every 5 epochs
+        # Save checkpoint every 5 epochs (model only, no optimizer/scheduler)
         if epoch_num % 5 == 0:
             checkpoint_path = output_dir / f"checkpoint_epoch_{epoch_num}.pth"
             torch.save({
                 "model": model.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "scheduler": scheduler.state_dict(),
                 "epoch": epoch_num,
                 "val_mIoU": mIoU,
                 "best_miou": best_miou,
