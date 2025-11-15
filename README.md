@@ -21,17 +21,21 @@ cd refdet
 python train.py \
     --data_dir /path/to/dataset \
     --output_dir outputs_v2 \
-    --batch_size 8 \
-    --epochs 60 \
-    --lr 1e-4 \
-    --weight_decay 1e-4 \ #can 0.0
-   # Note: weight_decay can be set to 0.0 if needed
-    --augment_prob 0.4 \
+    --batch_size 16 \
+    --epochs 20 \
+    --lr 5e-5 \
+    --weight_decay 1e-4 \
+    --augment_prob 0.2 \
     --num_heads 8 \
     --num_layers 4 \
     --dropout 0.1 \
     --workers 4
 ```
+
+**Lưu ý**: 
+- Model tự động sử dụng **Learning Rate Scheduler** (Cosine Annealing) để giảm LR dần
+- Có **Gradient Clipping** (max_norm=1.0) để tránh gradient explosion
+- Tự động skip batch có NaN/Inf loss để tránh làm hỏng training
 
 ### Resume từ checkpoint
 
@@ -41,12 +45,11 @@ python train.py \
     --data_dir /path/to/dataset \
     --output_dir outputs_v2 \
     --checkpoint_path outputs_v2/checkpoint_epoch_2.pth \
-    --batch_size 8 \
-    --epochs 60 \
-    --lr 1e-4 \
-    --weight_decay 1e-4 \ #can 0.0
-   # Note: weight_decay can be set to 0.0 if needed
-    --augment_prob 0.4 \
+    --batch_size 16 \
+    --epochs 20 \
+    --lr 5e-5 \
+    --weight_decay 1e-4 \
+    --augment_prob 0.2 \
     --num_heads 8 \
     --num_layers 4 \
     --dropout 0.1 \
@@ -57,10 +60,20 @@ python train.py \
 
 ### Tham số quan trọng
 
-- `--augment_prob`: Xác suất augment (mặc định 0.2 = 20%)
-- `--checkpoint_path`: Đường dẫn checkpoint để resume training
 - `--batch_size`: Mặc định 16, giảm xuống 8 nếu GPU < 16GB
-- `--epochs`: Số epoch (mặc định 80)
+- `--epochs`: Số epoch (mặc định 50)
+- `--lr`: Learning rate (mặc định 1e-4, khuyến nghị 5e-5 cho ổn định)
+- `--weight_decay`: Weight decay regularization (mặc định 1e-5, khuyến nghị 1e-4)
+- `--augment_prob`: Xác suất augment (mặc định 0.2 = 20%, khuyến nghị 0.3)
+- `--checkpoint_path`: Đường dẫn checkpoint để resume training
+- `--num_heads`, `--num_layers`, `--dropout`: Phải khớp với checkpoint khi resume
+
+### Tính năng tự động
+
+- **Learning Rate Scheduler**: Cosine Annealing (LR giảm từ giá trị ban đầu → 1% sau `epochs` epochs)
+- **Gradient Clipping**: Tự động clip gradient với max_norm=1.0 để tránh gradient explosion
+- **NaN/Inf Protection**: Tự động skip batch có loss không hợp lệ để tránh làm hỏng training
+- **Label Smoothing**: 0.05 (5%) để ổn định training
 
 ## 🔍 Inference
 
@@ -151,7 +164,11 @@ python create_zoomed_dataset.py \
 ## 📝 Ghi chú
 
 - Model sử dụng **Mixed Precision (AMP)** tự động để tiết kiệm VRAM
-- **Augment probability**: 20% để giữ phân phối dữ liệu gốc
+- **Learning Rate Scheduler**: Cosine Annealing tự động giảm LR trong quá trình training
+- **Gradient Clipping**: Tự động clip gradient để tránh gradient explosion
+- **NaN Protection**: Tự động skip batch có loss NaN/Inf
+- **Label Smoothing**: 0.05 (5%) để ổn định classification loss
+- **Augment probability**: Khuyến nghị 0.3 (30%) để cân bằng giữa augmentation và phân phối gốc
 - **Output format**: submission.json theo format yêu cầu với `video_id`, `detections`, `bboxes` (frame, x1, y1, x2, y2)
 
 ## 🏗️ Kiến trúc Model

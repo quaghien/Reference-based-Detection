@@ -85,11 +85,27 @@ def train_one_epoch(model, loader, optimizer, scaler, device, epoch: int = 0) ->
         with torch.amp.autocast('cuda', enabled=device.type == "cuda"):
             cls_probs, bbox_deltas = model(template, search)
             
-            cls_loss = patch_classification_loss(cls_probs, target_heatmaps, smooth=0.1)
+            cls_loss = patch_classification_loss(cls_probs, target_heatmaps, smooth=0.05)
             reg_loss = patch_regression_loss(bbox_deltas, target_deltas, pos_mask)
             loss = cls_loss + reg_loss
 
+        # Check for NaN/Inf loss before backward
+        if not torch.isfinite(loss):
+            # Log and skip this batch to avoid poisoning the optimizer/scaler
+            pbar.write(f"Warning: non-finite loss detected (loss={loss}). Skipping batch.")
+            # zero grads already set; skip update and continue
+            continue
+
+        # Backprop with AMP scaler. Unscale and clip grads to prevent explosion.
         scaler.scale(loss).backward()
+        # Unscale gradients before clipping (required for AMP)
+        try:
+            scaler.unscale_(optimizer)
+        except Exception:
+            # some older torch versions may not have unscale_; ignore if unavailable
+            pass
+        # Gradient clipping to stabilize training
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         scaler.step(optimizer)
         scaler.update()
 
@@ -193,6 +209,11 @@ def main(args):
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scaler = torch.amp.GradScaler('cuda', enabled=device.type == "cuda")
     
+    # Learning rate scheduler: Cosine annealing to gradually reduce LR
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.epochs, eta_min=args.lr * 0.01
+    )
+    
     # Load checkpoint if provided
     start_epoch = 0
     best_miou = 0.0
@@ -275,6 +296,10 @@ def main(args):
         val_metrics = evaluate(model, val_loader, device, epoch)
         
         mIoU = val_metrics["mean_iou"]
+        current_lr = optimizer.param_groups[0]['lr']
+        
+        # Step scheduler to reduce learning rate
+        scheduler.step()
         
         # Log epoch info
         epoch_log = {
@@ -284,6 +309,7 @@ def main(args):
             "train_patch_accuracy": train_metrics["patch_accuracy"],
             "val_mIoU": mIoU,
             "val_patch_accuracy": val_metrics["patch_accuracy"],
+            "learning_rate": current_lr,
             "timestamp": datetime.now().isoformat(),
         }
         training_log.append(epoch_log)
@@ -339,7 +365,8 @@ def main(args):
                   f"reg={train_metrics['reg_loss']:.4f} "
                   f"acc={train_metrics['patch_accuracy']:.3f} "
                   f"mIoU={mIoU:.4f} "
-                  f"(best: {best_miou:.4f})")
+                  f"(best: {best_miou:.4f}) "
+                  f"LR={current_lr:.2e}")
 
 
 if __name__ == "__main__":
