@@ -44,6 +44,7 @@ python train.py \
     --epochs 20 \
     --lr 5e-5 \
     --lr_schedule cosine \
+    --min_lr 5e-7 \
     --weight_decay 1e-4 \
     --augment_prob 0.2 \
     --num_heads 8 \
@@ -62,6 +63,7 @@ python train.py \
     --epochs 20 \
     --lr 5e-5 \
     --lr_schedule linear \
+    --min_lr 5e-7 \
     --weight_decay 1e-4 \
     --augment_prob 0.2 \
     --num_heads 8 \
@@ -72,7 +74,7 @@ python train.py \
 
 **Lưu ý**: 
 - `--lr_schedule`: Chọn `constant` (mặc định), `cosine` (giảm theo cosine), hoặc `linear` (giảm tuyến tính)
-- Cả `cosine` và `linear` đều giảm LR từ giá trị ban đầu → 1% sau `epochs` epochs
+- `--min_lr`: Minimum LR cho cosine/linear (mặc định: `lr * 0.01`, có thể tùy chỉnh)
 - Có **Gradient Clipping** (max_norm=1.0) để tránh gradient explosion
 
 ### Resume từ checkpoint
@@ -102,6 +104,7 @@ python train.py \
 - `--batch_size`: Mặc định 16, giảm xuống 8 nếu GPU < 16GB
 - `--epochs`: Số epoch (mặc định 50)
 - `--lr`: Learning rate (mặc định 1e-4, khuyến nghị 5e-5 cho ổn định)
+- `--min_lr`: Minimum learning rate cho cosine/linear schedule (mặc định: lr * 0.01)
 - `--weight_decay`: Weight decay regularization (mặc định 1e-5, khuyến nghị 1e-4)
 - `--augment_prob`: Xác suất augment (mặc định 0.2 = 20%, khuyến nghị 0.3)
 - `--lr_schedule`: LR schedule - `constant` (mặc định), `cosine` (annealing), hoặc `linear` (decay)
@@ -112,8 +115,8 @@ python train.py \
 
 - **Learning Rate Schedule**: 
   - `constant`: LR cố định (mặc định)
-  - `cosine`: Cosine annealing (LR giảm từ giá trị ban đầu → 1% sau `epochs` epochs)
-  - `linear`: Linear decay (LR giảm tuyến tính từ giá trị ban đầu → 1% sau `epochs` epochs)
+  - `cosine`: Cosine annealing (LR giảm từ `lr` → `min_lr` sau `epochs` epochs, mặc định `min_lr = lr * 0.01`)
+  - `linear`: Linear decay (LR giảm tuyến tính từ `lr` → `min_lr` sau `epochs` epochs, mặc định `min_lr = lr * 0.01`)
 - **Gradient Clipping**: Tự động clip gradient với max_norm=1.0 để tránh gradient explosion
 - **Label Smoothing**: 0.05 (5%) để ổn định training
 

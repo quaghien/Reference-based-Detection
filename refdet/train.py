@@ -197,12 +197,15 @@ def main(args):
     # Learning rate scheduler
     scheduler = None
     if args.lr_schedule == "cosine":
+        min_lr = args.min_lr if args.min_lr is not None else args.lr * 0.01
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=args.epochs, eta_min=args.lr * 0.01
+            optimizer, T_max=args.epochs, eta_min=min_lr
         )
     elif args.lr_schedule == "linear":
+        min_lr = args.min_lr if args.min_lr is not None else args.lr * 0.01
+        end_factor = min_lr / args.lr
         scheduler = torch.optim.lr_scheduler.LinearLR(
-            optimizer, start_factor=1.0, end_factor=0.01, total_iters=args.epochs
+            optimizer, start_factor=1.0, end_factor=end_factor, total_iters=args.epochs
         )
     
     # Load checkpoint if provided
@@ -355,6 +358,7 @@ if __name__ == "__main__":
     parser.add_argument("--augment_prob", type=float, default=0.2, help="Probability of applying augmentation (0.2 = 20% of data)")
     parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "cosine", "linear"], 
                        help="LR schedule: constant (fixed), cosine (annealing), or linear (decay)")
+    parser.add_argument("--min_lr", type=float, default=None, help="Minimum learning rate for cosine/linear schedule (default: lr * 0.01)")
     parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to checkpoint to resume training from")
     parser.add_argument("--workers", type=int, default=4, help="Number of data loading workers")
     args = parser.parse_args()
