@@ -194,24 +194,29 @@ def main(args):
     # Optimizer (no AMP scaler)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     
-    # Learning rate scheduler: Cosine annealing to gradually reduce LR
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=args.epochs, eta_min=args.lr * 0.01
-    )
+    # Learning rate scheduler
+    scheduler = None
+    if args.lr_schedule == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.epochs, eta_min=args.lr * 0.01
+        )
+    elif args.lr_schedule == "linear":
+        scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=1.0, end_factor=0.01, total_iters=args.epochs
+        )
     
     # Load checkpoint if provided
     start_epoch = 0
     best_miou = 0.0
     if args.checkpoint_path:
-        print(f"Loading checkpoint from {args.checkpoint_path}")
         checkpoint = torch.load(args.checkpoint_path, map_location=device)
+        checkpoint_state = checkpoint['model']
         
         # Detect num_layers from checkpoint
-        checkpoint_keys = checkpoint['model'].keys()
+        checkpoint_keys = checkpoint_state.keys()
         max_layer_idx = -1
         for key in checkpoint_keys:
             if 'self_attn_layers' in key:
-                # Extract layer index from key like "self_attn_layers.2.norm1.weight"
                 parts = key.split('.')
                 if len(parts) > 1 and parts[1].isdigit():
                     layer_idx = int(parts[1])
@@ -219,49 +224,26 @@ def main(args):
         
         checkpoint_num_layers = max_layer_idx + 1 if max_layer_idx >= 0 else args.num_layers
         
-        if checkpoint_num_layers != args.num_layers:
-            print(f"\n⚠️  WARNING: Checkpoint has {checkpoint_num_layers} layers but model was created with {args.num_layers} layers!")
-            print(f"   Please use --num_layers {checkpoint_num_layers} to match the checkpoint.")
-            print(f"   Continuing with strict=False (missing layers will be randomly initialized)...\n")
-        
         # Check if adaptive_proj exists in checkpoint
-        checkpoint_state = checkpoint['model']
         has_adaptive_proj = any('patch_embed.adaptive_proj' in key for key in checkpoint_state.keys())
         
         # If checkpoint has adaptive_proj, create it in model before loading
         if has_adaptive_proj and model.patch_embed.adaptive_proj is None:
-            # Get patch_dim from checkpoint weight shape
             adaptive_proj_weight = checkpoint_state.get('patch_embed.adaptive_proj.weight')
             if adaptive_proj_weight is not None:
                 patch_dim = adaptive_proj_weight.shape[1]
                 embed_dim = adaptive_proj_weight.shape[0]
                 model.patch_embed.adaptive_proj = nn.Linear(patch_dim, embed_dim).to(device)
                 model.patch_embed.add_module('adaptive_proj', model.patch_embed.adaptive_proj)
-                print(f"   Created adaptive_proj from checkpoint (patch_dim={patch_dim}, embed_dim={embed_dim})")
         
-        # Try to load state dict
+        # Load state dict
         try:
             model.load_state_dict(checkpoint_state, strict=True)
-            print("✓ Checkpoint loaded successfully (strict=True)")
-        except RuntimeError as e:
-            print(f"⚠️  Loading with strict=False due to key mismatches...")
-            missing_keys, unexpected_keys = model.load_state_dict(checkpoint_state, strict=False)
-            if missing_keys:
-                print(f"   Missing keys ({len(missing_keys)}): {missing_keys[:3]}...")
-            if unexpected_keys:
-                print(f"   Unexpected keys ({len(unexpected_keys)}): {unexpected_keys[:3]}...")
+        except RuntimeError:
+            model.load_state_dict(checkpoint_state, strict=False)
         
-        # Load optimizer and scheduler if exist in checkpoint
-        # (best_model files don't have optimizer/scheduler, only checkpoint files do)
-        if 'optimizer' in checkpoint:
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            print("✓ Optimizer state loaded")
-        else:
-            print("⚠️  No optimizer state in checkpoint (using fresh optimizer)")
-        
-        # Always start from epoch 0 when continuing (ignore saved epoch/best metrics)
         start_epoch = 0
-        print("✓ Checkpoint model weights loaded; treating this run as a fresh training job")
+        print(f"✓ Loaded checkpoint: {Path(args.checkpoint_path).name}")
 
     # Setup output directory
     output_dir = Path(args.output_dir)
@@ -289,8 +271,9 @@ def main(args):
         mIoU = val_metrics["mean_iou"]
         current_lr = optimizer.param_groups[0]['lr']
         
-        # Step scheduler to reduce learning rate
-        scheduler.step()
+        # Step scheduler to reduce learning rate (if enabled)
+        if scheduler is not None:
+            scheduler.step()
         
         # Log epoch info
         epoch_log = {
@@ -370,6 +353,8 @@ if __name__ == "__main__":
     parser.add_argument("--num_layers", type=int, default=4, help="Number of transformer layers")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate")
     parser.add_argument("--augment_prob", type=float, default=0.2, help="Probability of applying augmentation (0.2 = 20% of data)")
+    parser.add_argument("--lr_schedule", type=str, default="constant", choices=["constant", "cosine", "linear"], 
+                       help="LR schedule: constant (fixed), cosine (annealing), or linear (decay)")
     parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to checkpoint to resume training from")
     parser.add_argument("--workers", type=int, default=4, help="Number of data loading workers")
     args = parser.parse_args()

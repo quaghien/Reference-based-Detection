@@ -16,6 +16,7 @@ pip install -r requirements.txt
 
 ### Training từ đầu
 
+**LR cố định (mặc định):**
 ```bash
 cd refdet
 python train.py \
@@ -24,6 +25,43 @@ python train.py \
     --batch_size 16 \
     --epochs 20 \
     --lr 5e-5 \
+    --lr_schedule constant \
+    --weight_decay 1e-4 \
+    --augment_prob 0.2 \
+    --num_heads 8 \
+    --num_layers 4 \
+    --dropout 0.1 \
+    --workers 4
+```
+
+**LR giảm dần (Cosine Annealing):**
+```bash
+cd refdet
+python train.py \
+    --data_dir /path/to/dataset \
+    --output_dir outputs_v2 \
+    --batch_size 16 \
+    --epochs 20 \
+    --lr 5e-5 \
+    --lr_schedule cosine \
+    --weight_decay 1e-4 \
+    --augment_prob 0.2 \
+    --num_heads 8 \
+    --num_layers 4 \
+    --dropout 0.1 \
+    --workers 4
+```
+
+**LR giảm tuyến tính (Linear Decay):**
+```bash
+cd refdet
+python train.py \
+    --data_dir /path/to/dataset \
+    --output_dir outputs_v2 \
+    --batch_size 16 \
+    --epochs 20 \
+    --lr 5e-5 \
+    --lr_schedule linear \
     --weight_decay 1e-4 \
     --augment_prob 0.2 \
     --num_heads 8 \
@@ -33,9 +71,9 @@ python train.py \
 ```
 
 **Lưu ý**: 
-- Model tự động sử dụng **Learning Rate Scheduler** (Cosine Annealing) để giảm LR dần
+- `--lr_schedule`: Chọn `constant` (mặc định), `cosine` (giảm theo cosine), hoặc `linear` (giảm tuyến tính)
+- Cả `cosine` và `linear` đều giảm LR từ giá trị ban đầu → 1% sau `epochs` epochs
 - Có **Gradient Clipping** (max_norm=1.0) để tránh gradient explosion
-- Tự động skip batch có NaN/Inf loss để tránh làm hỏng training
 
 ### Resume từ checkpoint
 
@@ -48,6 +86,7 @@ python train.py \
     --batch_size 16 \
     --epochs 20 \
     --lr 5e-5 \
+    --lr_schedule constant \
     --weight_decay 1e-4 \
     --augment_prob 0.2 \
     --num_heads 8 \
@@ -56,7 +95,7 @@ python train.py \
     --workers 4
 ```
 
-**Lưu ý**: Khi resume, các tham số model (`num_heads`, `num_layers`, `dropout`) phải khớp với checkpoint. Các tham số training (`lr`, `batch_size`, `augment_prob`) có thể thay đổi.
+**Lưu ý**: Khi resume, các tham số model (`num_heads`, `num_layers`, `dropout`) phải khớp với checkpoint. Các tham số training (`lr`, `batch_size`, `augment_prob`, `lr_schedule`) có thể thay đổi.
 
 ### Tham số quan trọng
 
@@ -65,14 +104,17 @@ python train.py \
 - `--lr`: Learning rate (mặc định 1e-4, khuyến nghị 5e-5 cho ổn định)
 - `--weight_decay`: Weight decay regularization (mặc định 1e-5, khuyến nghị 1e-4)
 - `--augment_prob`: Xác suất augment (mặc định 0.2 = 20%, khuyến nghị 0.3)
+- `--lr_schedule`: LR schedule - `constant` (mặc định), `cosine` (annealing), hoặc `linear` (decay)
 - `--checkpoint_path`: Đường dẫn checkpoint để resume training
 - `--num_heads`, `--num_layers`, `--dropout`: Phải khớp với checkpoint khi resume
 
 ### Tính năng tự động
 
-- **Learning Rate Scheduler**: Cosine Annealing (LR giảm từ giá trị ban đầu → 1% sau `epochs` epochs)
+- **Learning Rate Schedule**: 
+  - `constant`: LR cố định (mặc định)
+  - `cosine`: Cosine annealing (LR giảm từ giá trị ban đầu → 1% sau `epochs` epochs)
+  - `linear`: Linear decay (LR giảm tuyến tính từ giá trị ban đầu → 1% sau `epochs` epochs)
 - **Gradient Clipping**: Tự động clip gradient với max_norm=1.0 để tránh gradient explosion
-- **NaN/Inf Protection**: Tự động skip batch có loss không hợp lệ để tránh làm hỏng training
 - **Label Smoothing**: 0.05 (5%) để ổn định training
 
 ## 🔍 Inference
@@ -163,12 +205,11 @@ python create_zoomed_dataset.py \
 
 ## 📝 Ghi chú
 
-- Model sử dụng **Mixed Precision (AMP)** tự động để tiết kiệm VRAM
-- **Learning Rate Scheduler**: Cosine Annealing tự động giảm LR trong quá trình training
-- **Gradient Clipping**: Tự động clip gradient để tránh gradient explosion
-- **NaN Protection**: Tự động skip batch có loss NaN/Inf
+- Model sử dụng **Mixed Precision (FP16/AMP)** tự động để tiết kiệm VRAM
+- **Learning Rate Schedule**: Dùng `--lr_schedule` để chọn `constant`, `cosine`, hoặc `linear` (mặc định: `constant`)
+- **Gradient Clipping**: Tự động clip gradient với max_norm=1.0 để tránh gradient explosion
 - **Label Smoothing**: 0.05 (5%) để ổn định classification loss
-- **Augment probability**: Khuyến nghị 0.3 (30%) để cân bằng giữa augmentation và phân phối gốc
+- **Augment probability**: Khuyến nghị 0.2-0.3 (20-30%) để cân bằng giữa augmentation và phân phối gốc
 - **Output format**: submission.json theo format yêu cầu với `video_id`, `detections`, `bboxes` (frame, x1, y1, x2, y2)
 
 ## 🏗️ Kiến trúc Model
