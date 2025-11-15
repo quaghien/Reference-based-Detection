@@ -6,6 +6,8 @@ RefDet phát hiện vật thể nhỏ trong video drone bằng cách so khớp �
 
 **Kiến trúc**: EfficientNet-B3 backbone + Transformer (4 layers, 8 heads) + Patch-based detection (4×4 grid)
 
+📖 **Xem chi tiết các kỹ thuật đã áp dụng:** [TECHNIQUES.md](TECHNIQUES.md)
+
 ## ⚙️ Cài đặt
 
 ```bash

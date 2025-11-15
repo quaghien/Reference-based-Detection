@@ -14,12 +14,13 @@ from .geometry import make_patch_heatmaps, encode_patch_bbox_deltas
 class PatchRetrievalDataset(Dataset):
     """Dataset for patch-based Siamese retrieval detection."""
 
-    def __init__(self, root: str, split: str = "train", augment: bool = True, augment_prob: float = 0.75, img_size: int = 640):
+    def __init__(self, root: str, split: str = "train", augment: bool = True, augment_prob: float = 0.75, img_size: int = 640, hard_mining: bool = True):
         self.root = Path(root)
         self.split = split
         self.augment = augment
         self.augment_prob = augment_prob  # Probability of applying augmentation (0.75 = 75%)
         self.img_size = img_size
+        self.hard_mining = hard_mining  # Enable hard mining for training
 
         # Patch configuration (fixed for 640x640, 4x4 grid)
         self.patch_grid_info = {
@@ -35,6 +36,12 @@ class PatchRetrievalDataset(Dataset):
 
         self.template_paths = self._collect_templates()
         self.samples = self._collect_samples()
+        
+        # Hard mining: categorize samples by difficulty
+        if self.hard_mining and split == "train":
+            self.hard_samples = self._identify_hard_samples()
+        else:
+            self.hard_samples = []
 
         self.transform = build_transforms(img_size=self.img_size, augment=augment)
         self.augment = augment
@@ -77,8 +84,49 @@ class PatchRetrievalDataset(Dataset):
         if not samples:
             raise RuntimeError(f"No search frames found in {self.search_images_dir}")
         return samples
+    
+    def _identify_hard_samples(self):
+        """Identify hard samples based on object size and position."""
+        hard_samples = []
+        
+        for i, (video_id, img_path, label_path) in enumerate(self.samples):
+            try:
+                with open(label_path) as f:
+                    line = f.readline().strip()
+                parts = line.split()
+                _, x_c, y_c, w, h = map(float, parts[:5])
+                
+                # Hard criteria for drone surveillance:
+                # 1. Small objects (w*h < 0.01 = objects < 64px in 640x640)
+                # 2. Objects near patch boundaries
+                # 3. Objects with aspect ratio far from 1:1
+                
+                object_area = w * h
+                aspect_ratio = max(w, h) / (min(w, h) + 1e-6)
+                
+                # Check if object is near patch boundaries (4x4 grid)
+                patch_x = int(x_c * 4)
+                patch_y = int(y_c * 4)
+                near_boundary = (abs(x_c * 4 - patch_x - 0.5) > 0.3 or 
+                               abs(y_c * 4 - patch_y - 0.5) > 0.3)
+                
+                # Hard sample criteria
+                is_hard = (object_area < 0.01 or  # Small objects
+                          aspect_ratio > 3.0 or   # Elongated objects  
+                          near_boundary)           # Near patch boundaries
+                
+                if is_hard:
+                    hard_samples.append(i)
+                    
+            except Exception:
+                continue  # Skip corrupted labels
+                
+        return hard_samples
 
     def __len__(self) -> int:
+        # For hard mining, oversample hard samples (33% of batch)
+        if self.hard_mining and self.split == "train" and len(self.hard_samples) > 0:
+            return len(self.samples) + len(self.hard_samples) // 3
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
@@ -89,13 +137,22 @@ class PatchRetrievalDataset(Dataset):
             Dict với keys:
             - "template": (3, 640, 640) - Template image tensor
             - "search": (3, 640, 640) - Search frame tensor  
-            - "patch_heatmaps": (16,) - Heatmaps for each patch (0 or 1)
+            - "patch_heatmaps": (16,) - Heatmaps for each patch (IoU values)
             - "patch_bbox_deltas": (16, 4) - Bbox deltas for each patch
             - "patch_pos_mask": (16,) - Positive mask for each patch
             - "gt_box": (4,) - [x_c, y_c, w, h] normalized coordinates
         """
+        # Hard mining: oversample hard samples
+        if (self.hard_mining and self.split == "train" and 
+            len(self.hard_samples) > 0 and idx >= len(self.samples)):
+            # Use hard sample
+            hard_idx = (idx - len(self.samples)) % len(self.hard_samples)
+            actual_idx = self.hard_samples[hard_idx]
+        else:
+            actual_idx = idx % len(self.samples)
+            
         # Get search image and label
-        video_id, img_path, label_path = self.samples[idx]
+        video_id, img_path, label_path = self.samples[actual_idx]
         
         # Choose random template from same video_id
         template_path = random.choice(self.template_paths[video_id])
@@ -134,19 +191,30 @@ class PatchRetrievalDataset(Dataset):
         
         # Transform bbox coordinates if geometric augmentation was applied
         if should_augment and aug_params is not None:
-            # Apply same transformations to bbox coordinates
-            # Note: For small rotations (±10°) and affine transforms, bbox changes are minimal
-            # For flips, we need to transform coordinates
-            if aug_params.get('flip_h', False):
-                x_c = 1.0 - x_c  # Flip horizontally
-            if aug_params.get('flip_v', False):
-                y_c = 1.0 - y_c  # Flip vertically
+            from .transforms import transform_bbox
             
-            # For small rotations and affine, bbox distortion is minimal
-            # We keep the original bbox coordinates (acceptable for ±10° rotation)
+            # Prepare affine params
+            affine_params = None
+            if 'affine_angle' in aug_params:
+                affine_params = (
+                    aug_params['affine_angle'],
+                    aug_params['affine_translate'],
+                    aug_params['affine_scale'],
+                    aug_params['affine_shear'],
+                )
+            
+            # Transform bbox with all geometric augmentations
+            x_c, y_c, w, h = transform_bbox(
+                x_c, y_c, w, h,
+                img_size=self.img_size,
+                angle=aug_params.get('angle'),
+                flip_h=aug_params.get('flip_h', False),
+                flip_v=aug_params.get('flip_v', False),
+                affine_params=affine_params
+            )
         
-        # Create patch-based targets
-        patch_heatmaps = make_patch_heatmaps((x_c, y_c), self.patch_grid_info)
+        # Create patch-based targets with soft labels (IoU-based)
+        patch_heatmaps = make_patch_heatmaps((x_c, y_c), self.patch_grid_info, box_wh=(w, h))
         patch_bbox_deltas, patch_pos_mask = encode_patch_bbox_deltas((x_c, y_c, w, h), self.patch_grid_info)
 
         return {

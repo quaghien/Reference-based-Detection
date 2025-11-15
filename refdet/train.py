@@ -19,29 +19,77 @@ from utils.metrics import compute_iou, compute_patch_accuracy
 from utils.geometry import decode_patch_bbox
 
 
-def patch_classification_loss(pred_probs: torch.Tensor, target_heatmaps: torch.Tensor, smooth: float = 0.1) -> torch.Tensor:
+def focal_loss(pred_probs: torch.Tensor, targets: torch.Tensor, alpha: float = 0.25, gamma: float = 2.0, smooth: float = 0.05, reduction: str = 'mean') -> torch.Tensor:
     """
-    Compute smooth patch classification loss.
+    Compute Focal Loss with label smoothing for addressing class imbalance.
+    
+    Args:
+        pred_probs: (B, 16) - Predicted probabilities (already sigmoid)
+        targets: (B, 16) - Soft targets (IoU values 0-1)
+        alpha: Weighting factor for positive class (0.25 means 25% weight for positive)
+        gamma: Focusing parameter (higher = more focus on hard examples)
+        smooth: Label smoothing factor
+        reduction: 'mean' (average over batch) or 'none' (per-sample loss)
+        
+    Returns:
+        loss: Focal loss value (scalar if reduction='mean', (B,) if reduction='none')
+    """
+    eps = 1e-7
+    pred_probs = torch.clamp(pred_probs, eps, 1 - eps)
+    
+    # Apply label smoothing to targets
+    # smooth / 2 gives: target=1 → 0.975, target=0 → 0.025 (with smooth=0.05)
+    targets_smooth = targets * (1 - smooth) + smooth / 2
+    
+    # Compute binary cross entropy with smoothed targets
+    ce_loss = -(targets_smooth * torch.log(pred_probs) + (1 - targets_smooth) * torch.log(1 - pred_probs))
+    
+    # Compute p_t (probability of true class) - use original targets for focal weighting
+    p_t = pred_probs * targets + (1 - pred_probs) * (1 - targets)
+    
+    # Compute alpha_t (class weighting) - use original targets
+    alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+    
+    # Compute focal weight: alpha_t * (1 - p_t)^gamma
+    focal_weight = alpha_t * (1 - p_t) ** gamma
+    
+    # Apply focal weight to cross entropy loss
+    focal_loss = focal_weight * ce_loss
+    
+    if reduction == 'mean':
+        return focal_loss.mean()
+    elif reduction == 'none':
+        return focal_loss.mean(dim=1)  # (B,) - average over 16 patches per sample
+    else:
+        raise ValueError(f"Invalid reduction: {reduction}")
+
+
+def patch_classification_loss(pred_probs: torch.Tensor, target_heatmaps: torch.Tensor, 
+                            use_focal: bool = True, smooth: float = 0.05) -> torch.Tensor:
+    """
+    Compute patch classification loss with option for Focal Loss.
     
     Args:
         pred_probs: (B, 16, 1) - Predicted probabilities (already sigmoid)
         target_heatmaps: (B, 16) - Target heatmaps (0 or 1)
-        smooth: Label smoothing factor
+        use_focal: Whether to use Focal Loss (True) or smooth BCE (False)
+        smooth: Label smoothing factor (only used if use_focal=False)
         
     Returns:
-        loss: Smooth binary cross-entropy loss
+        loss: Classification loss
     """
     pred_probs = pred_probs.squeeze(-1)  # (B, 16)
     
-    # Label smoothing: 0 -> smooth/2, 1 -> 1 - smooth/2
-    target_smooth = target_heatmaps * (1 - smooth) + smooth / 2
-    
-    # BCE loss with smooth targets (pred_probs already sigmoid)
-    eps = 1e-7
-    pred_probs = torch.clamp(pred_probs, eps, 1 - eps)
-    loss = -(target_smooth * torch.log(pred_probs) + (1 - target_smooth) * torch.log(1 - pred_probs))
-    
-    return loss.mean()
+    if use_focal:
+        # Use Focal Loss with label smoothing to handle class imbalance
+        return focal_loss(pred_probs, target_heatmaps, alpha=0.25, gamma=2.0, smooth=smooth)
+    else:
+        # Use smooth BCE loss (original approach)
+        target_smooth = target_heatmaps * (1 - smooth) + smooth / 2
+        eps = 1e-7
+        pred_probs = torch.clamp(pred_probs, eps, 1 - eps)
+        loss = -(target_smooth * torch.log(pred_probs) + (1 - target_smooth) * torch.log(1 - pred_probs))
+        return loss.mean()
 
 
 def patch_regression_loss(pred_deltas: torch.Tensor, target_deltas: torch.Tensor, pos_mask: torch.Tensor) -> torch.Tensor:
@@ -85,10 +133,27 @@ def train_one_epoch(model, loader, optimizer, device, epoch: int = 0) -> Dict[st
         # Forward pass (no AMP)
         cls_probs, bbox_deltas = model(template, search)
         
-        cls_loss = patch_classification_loss(cls_probs, target_heatmaps, smooth=0.05)
+        # Compute losses
+        # Classification loss with per-sample weighting
+        cls_probs_squeezed = cls_probs.squeeze(-1)  # (B, 16)
+        cls_loss_per_sample = focal_loss(cls_probs_squeezed, target_heatmaps, alpha=0.25, gamma=2.0, smooth=0.05, reduction='none')  # (B,)
+        
+        # Object size normalization: weight by number of positive patches
+        # Small objects (1 pos patch) get higher weight than large objects (4 pos patches)
+        num_pos_patches = pos_mask.sum(dim=1).float()  # (B,) - number of positive patches per sample
+        size_weights = 1.0 / torch.sqrt(num_pos_patches + 1e-6)  # Inverse sqrt weighting
+        
+        # Apply per-sample size weighting to classification loss
+        weighted_cls_loss = (size_weights * cls_loss_per_sample).mean()  # Weight each sample then average
+        
+        # Regression loss (already handles positive patches internally)
         reg_loss = patch_regression_loss(bbox_deltas, target_deltas, pos_mask)
+        
         reg_weight = 2.0
-        loss = cls_loss + reg_weight * reg_loss
+        loss = weighted_cls_loss + reg_weight * reg_loss
+        
+        # For logging, compute unweighted cls_loss
+        cls_loss = cls_loss_per_sample.mean()
 
         # Backprop with gradient clipping
         loss.backward()
