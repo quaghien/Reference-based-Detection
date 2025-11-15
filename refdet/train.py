@@ -258,21 +258,16 @@ def main(args):
         else:
             print("⚠️  No optimizer state in checkpoint (using fresh optimizer)")
         
-        # Load scheduler state if exists, otherwise manually step to correct epoch
-        if 'scheduler' in checkpoint:
-            scheduler.load_state_dict(checkpoint['scheduler'])
-            print("✓ Scheduler state loaded")
-        else:
-            # Manually step scheduler to match the resumed epoch
-            start_epoch_temp = checkpoint.get('epoch', 0)
-            for _ in range(start_epoch_temp):
-                scheduler.step()
-            print(f"⚠️  No scheduler state in checkpoint (manually stepped to epoch {start_epoch_temp})")
-        
-        start_epoch = checkpoint.get('epoch', 0)
+        # Always start from epoch 0 when resuming (ignore checkpoint epoch)
+        # Reset scheduler to initial state since we're starting from epoch 0
+        start_epoch = 0
+        # Keep best_miou from checkpoint to track previous best
         best_miou = checkpoint.get('best_miou', checkpoint.get('val_mIoU', 0.0))
+        checkpoint_epoch = checkpoint.get('epoch', 'unknown')
         current_lr = optimizer.param_groups[0]['lr']
-        print(f"Resumed from epoch {start_epoch}, best mIoU: {best_miou:.4f}, LR: {current_lr:.2e}")
+        print(f"Loaded checkpoint from epoch {checkpoint_epoch}, but starting training from epoch 0")
+        print(f"Previous best mIoU: {best_miou:.4f}, Optimizer LR: {current_lr:.2e}")
+        print("⚠️  Scheduler reset to initial state (will start from initial LR)")
 
     # Setup output directory
     output_dir = Path(args.output_dir)
