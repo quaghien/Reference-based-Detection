@@ -180,12 +180,12 @@ def decode_patch_bbox(patch_idx: int, deltas: torch.Tensor, patch_grid_info: dic
     Decode bbox from patch index and deltas.
     
     Args:
-        patch_idx: Index of the patch (0-7)
+        patch_idx: Index of the patch (0-15 for 4x4 grid)
         deltas: (4,) - [dx, dy, dw, dh]
         patch_grid_info: Dict with grid_h, grid_w
         
     Returns:
-        box: (4,) - [x_c, y_c, w, h] in normalized coordinates
+        box: (4,) - [x_c, y_c, w, h] in normalized coordinates (same device as deltas)
     """
     grid_h = patch_grid_info['grid_h']  # 4
     grid_w = patch_grid_info['grid_w']  # 4
@@ -209,4 +209,5 @@ def decode_patch_bbox(patch_idx: int, deltas: torch.Tensor, patch_grid_info: dic
     x_c = patch_cx + dx * w
     y_c = patch_cy + dy * h
     
-    return torch.tensor([x_c, y_c, w, h])
+    # Preserve device and dtype of input tensor
+    return torch.stack([x_c, y_c, w, h]).to(device=deltas.device, dtype=deltas.dtype)

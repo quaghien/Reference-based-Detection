@@ -189,7 +189,7 @@ def build_transforms(img_size: int = 640, augment: bool = True) -> Callable:
     Args:
         img_size: Target square size (default 640)
         augment: Enable augmentation (default True)
-    
+        
     Returns:
         Callable that returns normalized tensor (3, img_size, img_size)
     """
@@ -202,7 +202,7 @@ def build_transforms(img_size: int = 640, augment: bool = True) -> Callable:
         Args:
             image: Input image (path or numpy array)
             aug_params: Augmentation parameters (for syncing template/search)
-        
+            
         Returns:
             Normalized tensor (3, img_size, img_size)
         """
@@ -212,7 +212,7 @@ def build_transforms(img_size: int = 640, augment: bool = True) -> Callable:
         img = cv2.resize(img, (img_size, img_size), interpolation=cv2.INTER_LINEAR)
         pil = T.functional.to_pil_image(img)
         tensor = T.functional.to_tensor(pil)
-
+        
         if augment:
             if aug_params is None:
                 # Generate random augmentation parameters
@@ -231,7 +231,7 @@ def build_transforms(img_size: int = 640, augment: bool = True) -> Callable:
                     'affine_scale': random.uniform(0.95, 1.05),  # ±5% scale
                     'affine_shear': (random.uniform(-3, 3), random.uniform(-3, 3)),
                 }
-
+            
             # Apply geometric augmentation
             affine_params = (
                 aug_params['affine_angle'],
@@ -253,8 +253,8 @@ def build_transforms(img_size: int = 640, augment: bool = True) -> Callable:
             pil = TF.adjust_contrast(pil, aug_params['contrast'])
             pil = TF.adjust_saturation(pil, aug_params['saturation'])
             tensor = T.functional.to_tensor(pil)
-
+        
         # Normalize (ImageNet stats)
         return normalize(tensor)
-
+    
     return transform

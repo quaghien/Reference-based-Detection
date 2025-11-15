@@ -183,30 +183,30 @@ dataset/
 
 ### 1. Trích xuất frame + template
 
-```bash
+   ```bash
 cd data_process
-python prepare_retrieval_dataset_flat.py \
-    --source_dir ../train \
-    --output_dir ../retrieval_dataset_flat
-```
+   python prepare_retrieval_dataset_flat.py \
+       --source_dir ../train \
+       --output_dir ../retrieval_dataset_flat
+   ```
 
 ### 2. Fix label (mỗi file 1 bbox)
 
-```bash
-python fix_labels.py --data_dir ../retrieval_dataset_flat
-```
+   ```bash
+   python fix_labels.py --data_dir ../retrieval_dataset_flat
+   ```
 
 ### 3. Tạo dataset zoom (tùy chọn)
 
-```bash
-python create_zoomed_dataset.py \
-    --source_dir ../retrieval_dataset_flat \
-    --output_dir ../retrieval_dataset_flat_zoomed \
-    --area_ratio1 0.15 \
-    --area_ratio2 0.35 \
-    --area_ratio3 0.55 \
-    --area_ratio4 0.75
-```
+   ```bash
+   python create_zoomed_dataset.py \
+       --source_dir ../retrieval_dataset_flat \
+       --output_dir ../retrieval_dataset_flat_zoomed \
+       --area_ratio1 0.15 \
+       --area_ratio2 0.35 \
+       --area_ratio3 0.55 \
+       --area_ratio4 0.75
+   ```
 
 ## 📝 Ghi chú
 

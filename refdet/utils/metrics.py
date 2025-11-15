@@ -57,3 +57,60 @@ def compute_patch_accuracy(pred_probs: torch.Tensor, target_heatmaps: torch.Tens
     accuracy = correct.mean().item()
     
     return accuracy
+
+
+def nms(boxes: torch.Tensor, scores: torch.Tensor, iou_threshold: float = 0.5) -> torch.Tensor:
+    """
+    Non-Maximum Suppression (NMS) to remove overlapping bounding boxes.
+    
+    Algorithm:
+    1. Sort boxes by confidence scores (descending)
+    2. Keep box with highest score
+    3. Remove all boxes with IoU > threshold with kept box
+    4. Repeat until no boxes left
+    
+    Args:
+        boxes: (N, 4) - Bounding boxes in [x_c, y_c, w, h] format (normalized 0-1)
+        scores: (N,) - Confidence scores for each box
+        iou_threshold: IoU threshold for suppression (default 0.5)
+        
+    Returns:
+        keep_indices: (M,) - Indices of boxes to keep after NMS
+    """
+    if len(boxes) == 0:
+        return torch.tensor([], dtype=torch.long, device=boxes.device)
+    
+    # Convert to xyxy format for IoU computation
+    boxes_xyxy = box_cxcywh_to_xyxy(boxes)
+    
+    # Sort boxes by confidence scores (descending)
+    sorted_indices = torch.argsort(scores, descending=True)
+    
+    keep_indices = []
+    
+    while len(sorted_indices) > 0:
+        # Keep box with highest score
+        current_idx = sorted_indices[0].item()
+        keep_indices.append(current_idx)
+        
+        if len(sorted_indices) == 1:
+            break
+        
+        # Get current box
+        current_box = boxes_xyxy[current_idx:current_idx+1]  # (1, 4)
+        
+        # Get remaining boxes
+        remaining_indices = sorted_indices[1:]
+        remaining_boxes = boxes_xyxy[remaining_indices]  # (M, 4)
+        
+        # Compute IoU between current box and remaining boxes
+        ious = compute_iou(
+            boxes[current_idx:current_idx+1],  # (1, 4) in cxcywh
+            boxes[remaining_indices]  # (M, 4) in cxcywh
+        ).squeeze(0)  # (M,)
+        
+        # Keep boxes with IoU <= threshold (not overlapping too much)
+        mask = ious <= iou_threshold
+        sorted_indices = remaining_indices[mask]
+    
+    return torch.tensor(keep_indices, dtype=torch.long, device=boxes.device)

@@ -13,6 +13,7 @@ from tqdm import tqdm
 from model import EnhancedSiameseDetector
 from utils.transforms import build_transforms
 from utils.geometry import decode_patch_bbox
+from utils.metrics import nms
 
 
 def extract_frame_number(filename: str) -> int:
@@ -189,24 +190,47 @@ def main(args):
                 # Forward pass
                 cls_probs, bbox_deltas = model(template_batch, search_batch)
                 
-                # Find best patch (highest probability)
+                # Get patch probabilities
                 patch_probs = cls_probs.squeeze(-1).squeeze(0)  # (16,)
-                best_patch_idx = patch_probs.argmax().item()
-                best_prob = patch_probs[best_patch_idx].item()
                 
-                # Only add detection if confidence is above threshold
-                if best_prob > args.confidence_threshold:
-                    # Decode bbox from best patch
-                    deltas = bbox_deltas[0, best_patch_idx]  # (4,)
-                    bbox_norm = decode_patch_bbox(best_patch_idx, deltas, patch_grid_info)
+                # Find all patches with confidence above threshold
+                patches_above_threshold = (patch_probs > args.confidence_threshold).nonzero().squeeze(-1)
+                
+                if len(patches_above_threshold) > 0:
+                    # Decode bboxes from all patches above threshold
+                    all_bboxes = []
+                    all_confidences = []
                     
-                    # Convert to pixel coordinates using original image dimensions
-                    bbox_pixel = convert_bbox_to_pixel(bbox_norm, orig_w, orig_h)
+                    for patch_idx in patches_above_threshold:
+                        patch_idx = patch_idx.item()
+                        deltas = bbox_deltas[0, patch_idx]  # (4,)
+                        bbox_norm = decode_patch_bbox(patch_idx, deltas, patch_grid_info)
+                        all_bboxes.append(bbox_norm)
+                        all_confidences.append(patch_probs[patch_idx].item())
                     
-                    bboxes_list.append({
-                        "frame": frame_num,
-                        **bbox_pixel
-                    })
+                    # Stack into tensors
+                    all_bboxes_tensor = torch.stack(all_bboxes).to(device)  # (N, 4)
+                    all_confidences_tensor = torch.tensor(all_confidences, device=device)  # (N,)
+                    
+                    # Apply NMS to remove overlapping bboxes
+                    # NMS keeps boxes with highest confidence and removes overlapping ones
+                    keep_indices = nms(all_bboxes_tensor, all_confidences_tensor, iou_threshold=args.nms_iou_threshold)
+                    
+                    # After NMS, we typically keep the box with highest confidence
+                    # But if multiple boxes remain (not overlapping), we keep all
+                    if len(keep_indices) > 0:
+                        # Get the box with highest confidence after NMS
+                        # (NMS already sorted by confidence, so first one is highest)
+                        best_idx = keep_indices[0].item()
+                        final_bbox_norm = all_bboxes_tensor[best_idx]
+                        
+                        # Convert to pixel coordinates
+                        bbox_pixel = convert_bbox_to_pixel(final_bbox_norm, orig_w, orig_h)
+                        
+                        bboxes_list.append({
+                            "frame": frame_num,
+                            **bbox_pixel
+                        })
             
             # Group detections (for now, all bboxes in one detection group)
             if bboxes_list:
@@ -238,6 +262,7 @@ if __name__ == "__main__":
     parser.add_argument("--split", type=str, default="public_test", help="Dataset split (default: public_test)")
     parser.add_argument("--output_dir", type=str, required=True, help="Output directory (will save submission.json here)")
     parser.add_argument("--confidence_threshold", type=float, default=0.5, help="Confidence threshold for detections")
+    parser.add_argument("--nms_iou_threshold", type=float, default=0.5, help="IoU threshold for NMS (default: 0.5)")
     parser.add_argument("--num_heads", type=int, default=8, help="Number of attention heads")
     parser.add_argument("--num_layers", type=int, default=4, help="Number of transformer layers")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate")
