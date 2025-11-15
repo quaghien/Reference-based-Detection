@@ -66,7 +66,7 @@ def patch_regression_loss(pred_deltas: torch.Tensor, target_deltas: torch.Tensor
     return F.smooth_l1_loss(pred_masked, target_masked)
 
 
-def train_one_epoch(model, loader, optimizer, scaler, device, epoch: int = 0) -> Dict[str, float]:
+def train_one_epoch(model, loader, optimizer, device, epoch: int = 0) -> Dict[str, float]:
     """Train for one epoch."""
     model.train()
     total_cls, total_reg = 0.0, 0.0
@@ -82,32 +82,17 @@ def train_one_epoch(model, loader, optimizer, scaler, device, epoch: int = 0) ->
 
         optimizer.zero_grad(set_to_none=True)
         
-        with torch.amp.autocast('cuda', enabled=device.type == "cuda"):
-            cls_probs, bbox_deltas = model(template, search)
-            
-            cls_loss = patch_classification_loss(cls_probs, target_heatmaps, smooth=0.05)
-            reg_loss = patch_regression_loss(bbox_deltas, target_deltas, pos_mask)
-            loss = cls_loss + reg_loss
+        # Forward pass (no AMP)
+        cls_probs, bbox_deltas = model(template, search)
+        
+        cls_loss = patch_classification_loss(cls_probs, target_heatmaps, smooth=0.05)
+        reg_loss = patch_regression_loss(bbox_deltas, target_deltas, pos_mask)
+        loss = cls_loss + reg_loss
 
-        # Check for NaN/Inf loss before backward
-        if not torch.isfinite(loss):
-            # Log and skip this batch to avoid poisoning the optimizer/scaler
-            pbar.write(f"Warning: non-finite loss detected (loss={loss}). Skipping batch.")
-            # zero grads already set; skip update and continue
-            continue
-
-        # Backprop with AMP scaler. Unscale and clip grads to prevent explosion.
-        scaler.scale(loss).backward()
-        # Unscale gradients before clipping (required for AMP)
-        try:
-            scaler.unscale_(optimizer)
-        except Exception:
-            # some older torch versions may not have unscale_; ignore if unavailable
-            pass
-        # Gradient clipping to stabilize training
+        # Backprop with gradient clipping
+        loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        scaler.step(optimizer)
-        scaler.update()
+        optimizer.step()
 
         # Compute accuracy (cls_probs already sigmoid)
         acc = compute_patch_accuracy(cls_probs, target_heatmaps)
@@ -205,9 +190,8 @@ def main(args):
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, 
                            num_workers=args.workers, pin_memory=True)
 
-    # Optimizer and scaler
+    # Optimizer (no AMP scaler)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scaler = torch.amp.GradScaler('cuda', enabled=device.type == "cuda")
     
     # Learning rate scheduler: Cosine annealing to gradually reduce LR
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -266,23 +250,29 @@ def main(args):
             if unexpected_keys:
                 print(f"   Unexpected keys ({len(unexpected_keys)}): {unexpected_keys[:3]}...")
         
-        # Load optimizer and scaler only if they exist in checkpoint
-        # (best_model files don't have optimizer/scaler, only checkpoint files do)
+        # Load optimizer and scheduler if exist in checkpoint
+        # (best_model files don't have optimizer/scheduler, only checkpoint files do)
         if 'optimizer' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])
             print("✓ Optimizer state loaded")
         else:
             print("⚠️  No optimizer state in checkpoint (using fresh optimizer)")
         
-        if 'scaler' in checkpoint:
-            scaler.load_state_dict(checkpoint['scaler'])
-            print("✓ Scaler state loaded")
+        # Load scheduler state if exists, otherwise manually step to correct epoch
+        if 'scheduler' in checkpoint:
+            scheduler.load_state_dict(checkpoint['scheduler'])
+            print("✓ Scheduler state loaded")
         else:
-            print("⚠️  No scaler state in checkpoint (using fresh scaler)")
+            # Manually step scheduler to match the resumed epoch
+            start_epoch_temp = checkpoint.get('epoch', 0)
+            for _ in range(start_epoch_temp):
+                scheduler.step()
+            print(f"⚠️  No scheduler state in checkpoint (manually stepped to epoch {start_epoch_temp})")
         
         start_epoch = checkpoint.get('epoch', 0)
         best_miou = checkpoint.get('best_miou', checkpoint.get('val_mIoU', 0.0))
-        print(f"Resumed from epoch {start_epoch}, best mIoU: {best_miou:.4f}")
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"Resumed from epoch {start_epoch}, best mIoU: {best_miou:.4f}, LR: {current_lr:.2e}")
 
     # Setup output directory
     output_dir = Path(args.output_dir)
@@ -302,7 +292,7 @@ def main(args):
         epoch_num = epoch + 1
         
         # Training
-        train_metrics = train_one_epoch(model, train_loader, optimizer, scaler, device, epoch)
+        train_metrics = train_one_epoch(model, train_loader, optimizer, device, epoch)
         
         # Validation
         val_metrics = evaluate(model, val_loader, device, epoch)
@@ -344,8 +334,8 @@ def main(args):
             }, best_model_path)
             print(f"New best model saved: mIoU={mIoU:.4f}")
         
-        # Save last model
-        last_model_path = output_dir / f"last_model_epoch_{epoch_num}.pth"
+        # Save last model (overwrite previous)
+        last_model_path = output_dir / "last_model.pth"
         torch.save({
             "model": model.state_dict(),
             "epoch": epoch_num,
@@ -355,13 +345,13 @@ def main(args):
             "config": vars(args),
         }, last_model_path)
         
-        # Save checkpoint every 20 epochs
-        if epoch_num % 20 == 0:
+        # Save checkpoint every 5 epochs
+        if epoch_num % 5 == 0:
             checkpoint_path = output_dir / f"checkpoint_epoch_{epoch_num}.pth"
             torch.save({
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
-                "scaler": scaler.state_dict(),
+                "scheduler": scheduler.state_dict(),
                 "epoch": epoch_num,
                 "val_mIoU": mIoU,
                 "best_miou": best_miou,
