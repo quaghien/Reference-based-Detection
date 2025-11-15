@@ -266,8 +266,20 @@ def main(args):
             if unexpected_keys:
                 print(f"   Unexpected keys ({len(unexpected_keys)}): {unexpected_keys[:3]}...")
         
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        scaler.load_state_dict(checkpoint['scaler'])
+        # Load optimizer and scaler only if they exist in checkpoint
+        # (best_model files don't have optimizer/scaler, only checkpoint files do)
+        if 'optimizer' in checkpoint:
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            print("✓ Optimizer state loaded")
+        else:
+            print("⚠️  No optimizer state in checkpoint (using fresh optimizer)")
+        
+        if 'scaler' in checkpoint:
+            scaler.load_state_dict(checkpoint['scaler'])
+            print("✓ Scaler state loaded")
+        else:
+            print("⚠️  No scaler state in checkpoint (using fresh scaler)")
+        
         start_epoch = checkpoint.get('epoch', 0)
         best_miou = checkpoint.get('best_miou', checkpoint.get('val_mIoU', 0.0))
         print(f"Resumed from epoch {start_epoch}, best mIoU: {best_miou:.4f}")
