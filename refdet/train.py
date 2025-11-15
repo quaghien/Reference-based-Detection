@@ -87,7 +87,8 @@ def train_one_epoch(model, loader, optimizer, device, epoch: int = 0) -> Dict[st
         
         cls_loss = patch_classification_loss(cls_probs, target_heatmaps, smooth=0.05)
         reg_loss = patch_regression_loss(bbox_deltas, target_deltas, pos_mask)
-        loss = cls_loss + reg_loss
+        reg_weight = 2.0
+        loss = cls_loss + reg_weight * reg_loss
 
         # Backprop with gradient clipping
         loss.backward()
@@ -105,7 +106,7 @@ def train_one_epoch(model, loader, optimizer, device, epoch: int = 0) -> Dict[st
         pbar.set_postfix({
             "loss": f"{loss.item():.4f}",
             "cls": f"{cls_loss.item():.4f}",
-            "reg": f"{reg_loss.item():.4f}" if reg_loss.item() > 0 else "0.0000",
+            "reg": f"{reg_loss.item():.4f}",
             "acc": f"{acc:.3f}"
         })
 
