@@ -259,16 +259,9 @@ def main(args):
         else:
             print("⚠️  No optimizer state in checkpoint (using fresh optimizer)")
         
-        # Always start from epoch 0 when resuming (ignore checkpoint epoch)
-        # Reset scheduler to initial state since we're starting from epoch 0
+        # Always start from epoch 0 when continuing (ignore saved epoch/best metrics)
         start_epoch = 0
-        # Keep best_miou from checkpoint to track previous best
-        best_miou = checkpoint.get('best_miou', checkpoint.get('val_mIoU', 0.0))
-        checkpoint_epoch = checkpoint.get('epoch', 'unknown')
-        current_lr = optimizer.param_groups[0]['lr']
-        print(f"Loaded checkpoint from epoch {checkpoint_epoch}, but starting training from epoch 0")
-        print(f"Previous best mIoU: {best_miou:.4f}, Optimizer LR: {current_lr:.2e}")
-        print("⚠️  Scheduler reset to initial state (will start from initial LR)")
+        print("✓ Checkpoint model weights loaded; treating this run as a fresh training job")
 
     # Setup output directory
     output_dir = Path(args.output_dir)
@@ -331,7 +324,7 @@ def main(args):
             print(f"New best model saved: mIoU={mIoU:.4f}")
         
         # Save last model (model only, no optimizer/scheduler)
-        last_model_path = output_dir / "last_model.pth"
+        last_model_path = output_dir / f"last_model_epoch_{epoch_num}.pth"
         torch.save({
             "model": model.state_dict(),
             "epoch": epoch_num,
